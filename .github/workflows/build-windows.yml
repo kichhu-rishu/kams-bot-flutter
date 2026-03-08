@@ -1,0 +1,59 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Download Ollama for Windows
+        shell: pwsh
+        run: |
+          $url = "https://github.com/ollama/ollama/releases/download/v0.17.7/ollama-windows-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile ollama-windows.zip
+          Expand-Archive ollama-windows.zip -DestinationPath windows/runner/Resources/ollama
+          Remove-Item ollama-windows.zip
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Copy Ollama into build output
+        shell: pwsh
+        run: |
+          $dest = "build\windows\x64\runner\Release\ollama"
+          New-Item -ItemType Directory -Force -Path $dest
+          Copy-Item -Recurse "windows\runner\Resources\ollama\*" $dest
+
+      - name: Zip the build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath KamsBot-Windows.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KamsBot-Windows
+          path: KamsBot-Windows.zip
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0-windows
+          name: Kams Bot — Windows
+          files: KamsBot-Windows.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
