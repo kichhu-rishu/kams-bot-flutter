@@ -1,0 +1,165 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - name: Download Ollama for Windows
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/ollama/ollama/releases/download/v0.17.7/ollama-windows-amd64.zip" -OutFile ollama.zip
+          Expand-Archive ollama.zip -DestinationPath build-ollama-win
+          Remove-Item ollama.zip
+
+      - name: Build Windows
+        run: flutter build windows --release
+
+      - name: Bundle Ollama into output
+        shell: pwsh
+        run: |
+          $out = "build\windows\x64\runner\Release"
+          New-Item -ItemType Directory -Force "$out\ollama"
+          Copy-Item -Recurse "build-ollama-win\*" "$out\ollama"
+          Compress-Archive -Path "$out\*" -DestinationPath KamsBot-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KamsBot-Windows
+          path: KamsBot-Windows.zip
+
+  # ── Android ────────────────────────────────────────────────────────────────
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - name: Build Android APK
+        run: flutter build apk --release --split-per-abi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KamsBot-Android
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - name: Download Ollama for macOS
+        run: |
+          curl -L -o ollama.tgz https://github.com/ollama/ollama/releases/download/v0.17.7/ollama-darwin.tgz
+          mkdir -p macos/Runner/Resources/ollama
+          tar -xzf ollama.tgz -C macos/Runner/Resources/ollama
+
+      - name: Build macOS
+        run: flutter build macos --release
+
+      - name: Bundle Ollama + zip
+        run: |
+          APP="build/macos/Build/Products/Release/kams_bot.app"
+          mkdir -p "$APP/Contents/Resources/ollama"
+          cp -r macos/Runner/Resources/ollama/* "$APP/Contents/Resources/ollama/"
+          codesign --force --deep --sign - "$APP"
+          cd build/macos/Build/Products/Release
+          zip -r KamsBot-macOS.zip kams_bot.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KamsBot-macOS
+          path: build/macos/Build/Products/Release/KamsBot-macOS.zip
+
+  # ── iOS ────────────────────────────────────────────────────────────────────
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - name: Build iOS (no-codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r KamsBot-iOS.ipa Payload
+          rm -rf Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KamsBot-iOS
+          path: KamsBot-iOS.ipa
+
+  # ── Upload all to GitHub Release ───────────────────────────────────────────
+  release:
+    needs: [build-windows, build-android, build-macos, build-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0
+          name: Kams Bot v1.0
+          body: |
+            ## Kams Bot — Local AI Assistant
+
+            Download for your platform:
+            - **Windows**: KamsBot-Windows.zip — unzip and run `kams_bot.exe`
+            - **Android**: KamsBot-Android.apk — install directly on your phone
+            - **macOS**: KamsBot-macOS.zip — unzip, move to Applications, right-click → Open
+            - **iOS**: KamsBot-iOS.ipa — install via AltStore or Sideloadly (no App Store needed)
+
+            The AI model (~1 GB) downloads automatically on first launch.
+          files: |
+            artifacts/KamsBot-Windows/KamsBot-Windows.zip
+            artifacts/KamsBot-Android/app-arm64-v8a-release.apk
+            artifacts/KamsBot-macOS/KamsBot-macOS.zip
+            artifacts/KamsBot-iOS/KamsBot-iOS.ipa
+          token: ${{ secrets.GITHUB_TOKEN }}
